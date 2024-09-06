@@ -21,6 +21,8 @@ import {
   useRegenerateMessage,
   useRemoveMessageById,
   useRemoveMessagesAfterCurrentMessage,
+  useScrollToBottom,
+  useSelectDerivedMessages,
   useSendMessageWithSse,
 } from '@/hooks/logic-hooks';
 import {
@@ -40,7 +42,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 import { useSearchParams } from 'umi';
@@ -362,20 +363,71 @@ export const useSelectCurrentConversation = () => {
   };
 };
 
-export const useScrollToBottom = (currentConversation: IClientConversation) => {
-  const ref = useRef<HTMLDivElement>(null);
+// export const useScrollToBottom = (currentConversation: IClientConversation) => {
+//   const ref = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = useCallback(() => {
-    if (currentConversation.id) {
-      ref.current?.scrollIntoView({ behavior: 'instant' });
+//   const scrollToBottom = useCallback(() => {
+//     if (currentConversation.id) {
+//       ref.current?.scrollIntoView({ behavior: 'instant' });
+//     }
+//   }, [currentConversation]);
+
+//   useEffect(() => {
+//     scrollToBottom();
+//   }, [scrollToBottom]);
+
+//   return ref;
+// };
+
+export const useSelectNextMessages = () => {
+  const {
+    ref,
+    setDerivedMessages,
+    derivedMessages,
+    addNewestAnswer,
+    addNewestQuestion,
+    removeLatestMessage,
+    removeMessageById,
+    removeMessagesAfterCurrentMessage,
+  } = useSelectDerivedMessages();
+  const { data: conversation, loading } = useFetchNextConversation();
+  const { data: dialog } = useFetchNextDialog();
+  const { conversationId, dialogId } = useGetChatSearchParams();
+
+  const addPrologue = useCallback(() => {
+    if (dialogId !== '' && conversationId === '') {
+      const prologue = dialog.prompt_config?.prologue;
+
+      const nextMessage = {
+        role: MessageType.Assistant,
+        content: prologue,
+        id: uuid(),
+      } as IMessage;
+
+      setDerivedMessages([nextMessage]);
     }
-  }, [currentConversation]);
+  }, [conversationId, dialog, dialogId, setDerivedMessages]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [scrollToBottom]);
+    addPrologue();
+  }, [addPrologue]);
 
-  return ref;
+  useEffect(() => {
+    if (conversationId) {
+      setDerivedMessages(conversation.message);
+    }
+  }, [conversation.message, conversationId, setDerivedMessages]);
+
+  return {
+    ref,
+    derivedMessages,
+    loading,
+    addNewestAnswer,
+    addNewestQuestion,
+    removeLatestMessage,
+    removeMessageById,
+    removeMessagesAfterCurrentMessage,
+  };
 };
 
 export const useFetchConversationOnMount = () => {
@@ -420,19 +472,22 @@ export const useHandleMessageInputChange = () => {
   };
 };
 
-export const useSendMessage = (
-  conversation: IClientConversation,
-  addNewestConversation: (message: Message, answer?: string) => void,
-  removeLatestMessage: () => void,
-  addNewestAnswer: (answer: IAnswer) => void,
-  removeMessagesAfterCurrentMessage: (messageId: string) => void,
-) => {
+export const useSendNextMessage = () => {
   const { setConversation } = useSetConversation();
   const { conversationId } = useGetChatSearchParams();
   const { handleInputChange, value, setValue } = useHandleMessageInputChange();
-
   const { handleClickConversation } = useClickConversationCard();
   const { send, answer, done, setDone } = useSendMessageWithSse();
+  const {
+    ref,
+    derivedMessages,
+    loading,
+    addNewestAnswer,
+    addNewestQuestion,
+    removeLatestMessage,
+    removeMessageById,
+    removeMessagesAfterCurrentMessage,
+  } = useSelectNextMessages();
 
   const sendMessage = useCallback(
     async ({
@@ -446,7 +501,7 @@ export const useSendMessage = (
     }) => {
       const res = await send({
         conversation_id: currentConversationId ?? conversationId,
-        messages: [...(messages ?? conversation?.message ?? []), message],
+        messages: [...(messages ?? derivedMessages ?? []), message],
       });
 
       if (res && (res?.response.status !== 200 || res?.data?.retcode !== 0)) {
@@ -466,7 +521,7 @@ export const useSendMessage = (
       }
     },
     [
-      conversation?.message,
+      derivedMessages,
       conversationId,
       handleClickConversation,
       removeLatestMessage,
@@ -483,7 +538,11 @@ export const useSendMessage = (
         const data = await setConversation(message.content);
         if (data.retcode === 0) {
           const id = data.data.id;
-          sendMessage({ message, currentConversationId: id });
+          sendMessage({
+            message,
+            currentConversationId: id,
+            messages: data.data.message,
+          });
         }
       }
     },
@@ -493,15 +552,19 @@ export const useSendMessage = (
   const { regenerateMessage } = useRegenerateMessage({
     removeMessagesAfterCurrentMessage,
     sendMessage,
-    messages: conversation.message,
+    messages: derivedMessages,
   });
 
   useEffect(() => {
     //  #1289
-    if (answer.answer && answer?.conversationId === conversationId) {
+    if (
+      answer.answer &&
+      !done &&
+      (answer?.conversationId === conversationId || conversationId === '')
+    ) {
       addNewestAnswer(answer);
     }
-  }, [answer, addNewestAnswer, conversationId]);
+  }, [answer, addNewestAnswer, conversationId, done]);
 
   useEffect(() => {
     // #1289 switch to another conversion window when the last conversion answer doesn't finish.
@@ -515,7 +578,7 @@ export const useSendMessage = (
       if (trim(value) === '') return;
       const id = uuid();
 
-      addNewestConversation({
+      addNewestQuestion({
         content: value,
         doc_ids: documentIds,
         id,
@@ -531,7 +594,7 @@ export const useSendMessage = (
         });
       }
     },
-    [addNewestConversation, handleSendMessage, done, setValue, value],
+    [addNewestQuestion, handleSendMessage, done, setValue, value],
   );
 
   return {
@@ -540,7 +603,11 @@ export const useSendMessage = (
     value,
     setValue,
     regenerateMessage,
-    loading: !done,
+    sendLoading: !done,
+    loading,
+    ref,
+    derivedMessages,
+    removeMessageById,
   };
 };
 
