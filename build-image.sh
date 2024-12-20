@@ -1,1 +1,1 @@
-sudo docker build -t infiniflow/ragflow:release .
+sudo docker build -t infiniflow/ragflow:release-20240815 .
